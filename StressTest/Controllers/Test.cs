@@ -7,46 +7,40 @@ namespace StressTest.Controllers;
 [Route("[controller]")]
 public class Test : ControllerBase
 {
-    private readonly DbConnection _dbConnection;
+    private readonly PointInfoSubmitter _pointInfoSubmitter;
     private readonly IMemoryCache _cache;
 
     private static readonly SemaphoreSlim Semaphore = new(1, 1);
 
-    public Test(DbConnection dbConnection, IMemoryCache cache)
+    public Test(PointInfoSubmitter pointInfoSubmitter, IMemoryCache cache)
     {
-        _dbConnection = dbConnection;
+        _pointInfoSubmitter = pointInfoSubmitter;
         _cache = cache;
     }
 
     [HttpPost("NewApiWithSemaphore/{index:int}")]
     public async Task<IActionResult> NewApiWithSemaphore(int index, PointRequest pointRequest, CancellationToken ct)
     {
-        if (_cache.TryGetValue(index, out _)) 
-            return Ok();
-
-        _cache.Set(index, 0);
         await Semaphore.WaitAsync(ct);
 
-        Exception? exception = null;
+        if (_cache.TryGetValue(index, out _)) return Ok();
+
+        _cache.Set(index, 0);
+
         try
         {
-            await _dbConnection
+            await _pointInfoSubmitter
                 .ExecuteSpNew(pointRequest.PointData)
                 .ExecuteWithRetry(null, HttpContext.RequestAborted, ct);
-        }
-        catch (Exception ex)
-        {
-            exception = ex;
-        }
-        finally
-        {
+
             _cache.Remove(index);
             Semaphore.Release();
-        }
-
-        if (exception is null)
             return Ok();
-
-        throw exception;
+        }
+        catch
+        {
+            Semaphore.Release();
+            throw;
+        }
     }
 }
